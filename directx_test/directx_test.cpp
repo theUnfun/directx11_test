@@ -1,6 +1,8 @@
 #include <iostream>
 #include <windows.h>
 #include <d3d11.h>
+#include <wrl/client.h>
+#include <cassert>
 //#include <d3dx11.h>
 
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
@@ -54,7 +56,7 @@ HWND CreateWindowInstance()
 	RECT rc = {0, 0, 640, 480};
 	AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, FALSE);
 	HWND hWnd = CreateWindow(L"myDirectx", L"myDirectx", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
-	                         rc.right - rc.left, rc.bottom - rc.top, NULL, NULL, GetModuleHandle(nullptr), NULL);
+	                         rc.right - rc.left, rc.bottom - rc.top, nullptr, nullptr, GetModuleHandle(nullptr), nullptr);
 	if (hWnd)
 	{
 		ShowWindow(hWnd, SW_SHOWDEFAULT);
@@ -118,7 +120,7 @@ bool CreateDeviceAndSwapchainAndImmediateContext(HWND hWnd,
 	{
 		D3D_DRIVER_TYPE driverType = driverTypes[driverTypeIndex];
 		D3D_FEATURE_LEVEL featureLevel = D3D_FEATURE_LEVEL_11_0;
-		hr = D3D11CreateDeviceAndSwapChain(NULL, driverType, NULL, createDeviceFlags, featureLevels, numFeatureLevels,
+		hr = D3D11CreateDeviceAndSwapChain(nullptr, driverType, nullptr, createDeviceFlags, featureLevels, numFeatureLevels,
 		                                   D3D11_SDK_VERSION, &sd, pSwapChain, pd3dDevice, &featureLevel, pImmediateContext);
 		if (SUCCEEDED(hr))  // Если устройства созданы успешно, то выходим из цикла
 			break;
@@ -128,7 +130,7 @@ bool CreateDeviceAndSwapchainAndImmediateContext(HWND hWnd,
 
 	// Теперь создаем задний буфер. Обратите внимание, в SDK
 	// RenderTargetOutput - это передний буфер, а RenderTargetView - задний.
-	// ID3D11Texture2D* pBackBuffer = NULL;
+	// ID3D11Texture2D* pBackBuffer = nullptr;
 
 
 	hr = (*pSwapChain)->GetBuffer(0, __uuidof(ID3D11Texture2D), (LPVOID*)pBackBuffer);
@@ -137,13 +139,13 @@ bool CreateDeviceAndSwapchainAndImmediateContext(HWND hWnd,
 
 	//// Я уже упоминал, что интерфейс g_pd3dDevice будет
 	//// использоваться для создания остальных объектов
-	// hr = pd3dDevice->CreateRenderTargetView(pBackBuffer, NULL, &g_pRenderTargetView);
+	// hr = pd3dDevice->CreateRenderTargetView(pBackBuffer, nullptr, &g_pRenderTargetView);
 	// pBackBuffer->Release();
 	// if (FAILED(hr))
 	//	return hr;
 
 	//// Подключаем объект заднего буфера к контексту устройства
-	// g_pImmediateContext->OMSetRenderTargets(1, &g_pRenderTargetView, NULL);
+	// g_pImmediateContext->OMSetRenderTargets(1, &g_pRenderTargetView, nullptr);
 
 	//// Настройка вьюпорта
 	// D3D11_VIEWPORT vp;
@@ -162,8 +164,7 @@ bool CreateDeviceAndSwapchainAndImmediateContext(HWND hWnd,
 
 bool RenderTargetView(ID3D11Device* device, ID3D11Texture2D* buffer, ID3D11RenderTargetView** rtv)
 {
-	D3D11_RENDER_TARGET_VIEW_DESC desc;
-	HRESULT hr = device->CreateRenderTargetView(buffer, NULL, rtv);
+	HRESULT hr = device->CreateRenderTargetView(buffer, nullptr, rtv);
 	if (FAILED(hr))
 		return false;
 	return true;
@@ -172,7 +173,7 @@ bool RenderTargetView(ID3D11Device* device, ID3D11Texture2D* buffer, ID3D11Rende
 
 void Render(ID3D11DeviceContext* pImmediateContext, ID3D11RenderTargetView* pRenderTargetView, IDXGISwapChain* pSwapChain)
 {
-	pImmediateContext->OMSetRenderTargets(1, &pRenderTargetView, NULL);
+	pImmediateContext->OMSetRenderTargets(1, &pRenderTargetView, nullptr);
 
 	// Настройка вьюпорта
 	D3D11_VIEWPORT vp;
@@ -192,41 +193,64 @@ void Render(ID3D11DeviceContext* pImmediateContext, ID3D11RenderTargetView* pRen
 	pSwapChain->Present(0, 0);
 }
 
+class WindowClass
+{
+public:
+	WindowClass()
+	{
+		assert(!is_init);
+		is_init = RegisterWindowClass();
+	}
+
+	~WindowClass()
+	{
+		if (is_init)
+		{
+			UnregisterWindowClass();
+		}
+	}
+
+	explicit operator bool() const
+	{
+		return is_init;
+	}
+
+
+private:
+	bool is_init = false;
+};
+
 int main()
 {
-	if (!RegisterWindowClass())
+	WindowClass window;
+
+	if (!window)
 	{
 		return -1;
 	}
+
+
 	HWND main_window_hwnd = CreateWindowInstance();
 	if (!main_window_hwnd)
 	{
-		UnregisterWindowClass();
 		return -1;
 	}
 
-	ID3D11Device* pd3dDevice = NULL;                // Устройство (для создания объектов)
-	ID3D11DeviceContext* pImmediateContext = NULL;  // Контекст устройства (рисование)
-	IDXGISwapChain* pSwapChain = NULL;              // Цепь связи (буфера с экраном)
-	ID3D11Texture2D* pBackBuffer = NULL;
-	ID3D11RenderTargetView* pRenderTargetView = NULL;  // Объект заднего буфера
+	Microsoft::WRL::ComPtr<ID3D11Device> pd3dDevice = nullptr;  // Устройство (для создания объектов)
+	Microsoft::WRL::ComPtr<ID3D11DeviceContext> pImmediateContext = nullptr;  // Контекст устройства (рисование)
+	Microsoft::WRL::ComPtr<IDXGISwapChain> pSwapChain = nullptr;  // Цепь связи (буфера с экраном)
+	Microsoft::WRL::ComPtr<ID3D11Texture2D> pBackBuffer = nullptr;
+	Microsoft::WRL::ComPtr<ID3D11RenderTargetView> pRenderTargetView = nullptr;  // Объект заднего буфера
 
-	if (!CreateDeviceAndSwapchainAndImmediateContext(main_window_hwnd, &pd3dDevice, &pImmediateContext, &pSwapChain,
-	                                                 &pBackBuffer))
+	if (!CreateDeviceAndSwapchainAndImmediateContext(main_window_hwnd, pd3dDevice.GetAddressOf(),
+	                                                 pImmediateContext.GetAddressOf(), pSwapChain.GetAddressOf(),
+	                                                 pBackBuffer.GetAddressOf()))
 	{
-		UnregisterWindowClass();
 		return -1;
 	}
 
-	if (!RenderTargetView(pd3dDevice, pBackBuffer, &pRenderTargetView))
+	if (!RenderTargetView(pd3dDevice.Get(), pBackBuffer.Get(), pRenderTargetView.GetAddressOf()))
 	{
-		pBackBuffer->Release();
-		pSwapChain->Release();
-		pImmediateContext->Release();
-		pd3dDevice->Release();
-
-		UnregisterWindowClass();
-
 		return -1;
 	}
 
@@ -235,23 +259,14 @@ int main()
 	MSG msg = {0};
 	while (WM_QUIT != msg.message)
 	{
-		if (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE))
+		if (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
 		{
 			TranslateMessage(&msg);
 			DispatchMessage(&msg);
 		}
 		else
 		{
-			Render(pImmediateContext, pRenderTargetView, pSwapChain);
+			Render(pImmediateContext.Get(), pRenderTargetView.Get(), pSwapChain.Get());
 		}
 	}
-
-	pRenderTargetView->Release();
-	pBackBuffer->Release();
-	pSwapChain->Release();
-	pImmediateContext->Release();
-	pd3dDevice->Release();
-
-
-	UnregisterWindowClass();
 }
