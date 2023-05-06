@@ -1,18 +1,193 @@
 #include <iostream>
+#include <vector>
 #include <windows.h>
 #include <d3d11.h>
 #include <wrl/client.h>
 #include <cassert>
 #include <d3dcompiler.h>
+#include <DirectXMath.h>
+#include <DirectXPackedVector.h>
 //#include <d3dx11.h>
 
 const int Error = -1;
 
-struct float3
+using float3 = DirectX::XMFLOAT3;
+using matrix = DirectX::XMMATRIX;
+using uint2 = DirectX::XMUINT2;
+
+struct VertexInput
 {
-	float x = 0.f;
-	float y = 0.f;
-	float z = 0.f;
+	float3 position;
+	float3 color;
+};
+
+struct Geometry
+{
+	Microsoft::WRL::ComPtr<ID3D11Buffer> vertex_buffer;
+	Microsoft::WRL::ComPtr<ID3D11Buffer> index_buffer;
+};
+
+struct Object
+{
+	matrix transform;  // Матрица мира
+
+	Geometry geometry;
+};
+
+struct Camera
+{
+	void Set(const float3& eye,
+	         const float3& at,
+	         const float3& up,
+	         const uint2& resolution,
+	         float near_plane,
+	         float far_plane,
+	         float fov)
+	{
+		// Инициализация матрицы вида
+		auto toXMVECTOR = [](const float3& value) { return DirectX::XMVectorSet(value.x, value.y, value.z, 0); };
+		view_matrix = DirectX::XMMatrixLookAtLH(toXMVECTOR(eye), toXMVECTOR(at), toXMVECTOR(up));
+
+		// Инициализация матрицы проекции
+		projection_matrix =
+		    DirectX::XMMatrixPerspectiveFovLH(fov, resolution.x / (float)resolution.y, near_plane, far_plane);
+	}
+
+	matrix view_matrix;        // Матрица вида
+	matrix projection_matrix;  // Матрица проекции
+};
+
+struct ShaderParameters
+{
+	matrix world_matrix;       // Матрица мира
+	matrix view_matrix;        // Матрица вида
+	matrix projection_matrix;  // Матрица проекции
+};
+
+struct BackBuffer
+{
+	Microsoft::WRL::ComPtr<IDXGISwapChain> swap_chain;
+	Microsoft::WRL::ComPtr<ID3D11Texture2D> color;
+	Microsoft::WRL::ComPtr<ID3D11RenderTargetView> rtv;
+
+	Microsoft::WRL::ComPtr<ID3D11Texture2D> depth;
+	Microsoft::WRL::ComPtr<ID3D11DepthStencilView> dsv;
+};
+
+struct Material
+{
+	Microsoft::WRL::ComPtr<ID3D11VertexShader> vertex_shader;
+	Microsoft::WRL::ComPtr<ID3D11PixelShader> pixel_shader;
+	Microsoft::WRL::ComPtr<ID3D11InputLayout> vertex_layout;
+	Microsoft::WRL::ComPtr<ID3D11Buffer> constant_buffer;
+};
+
+
+struct Renderer
+{
+	Microsoft::WRL::ComPtr<ID3D11Device> device;
+	Microsoft::WRL::ComPtr<ID3D11DeviceContext> immediate_context;
+};
+
+bool CreateGeometry(Renderer& renderer, Geometry& geometry)
+{
+	VertexInput vertices[] = {
+	    VertexInput{{0.0f, 1.5f, 0.0f}, {1.0f, 1.0f, 0.0f}},  VertexInput{{-1.0f, 0.0f, -1.0f}, {0.0f, 1.0f, 0.0f}},
+	    VertexInput{{1.0f, 0.0f, -1.0f}, {1.0f, 0.0f, 0.0f}}, VertexInput{{-1.0f, 0.0f, 1.0f}, {0.0f, 1.0f, 1.0f}},
+	    VertexInput{{1.0f, 0.0f, 1.0f}, {1.0f, 0.0f, 1.0f}},
+	};
+
+	D3D11_BUFFER_DESC bd;         // Структура, описывающая создаваемый буфер
+	ZeroMemory(&bd, sizeof(bd));  // очищаем ее
+	bd.Usage = D3D11_USAGE_DEFAULT;
+	bd.ByteWidth = sizeof(VertexInput) * ARRAYSIZE(vertices);  // размер буфера
+	bd.BindFlags = D3D11_BIND_VERTEX_BUFFER;                   // тип буфера - буфер вершин
+	bd.CPUAccessFlags = 0;
+	D3D11_SUBRESOURCE_DATA InitData;          // Структура, содержащая данные буфера
+	ZeroMemory(&InitData, sizeof(InitData));  // очищаем ее
+	InitData.pSysMem = vertices;              // указатель на наши 3 вершины
+	// Вызов метода g_pd3dDevice создаст объект буфера вершин
+	HRESULT hr = renderer.device->CreateBuffer(&bd, &InitData, geometry.vertex_buffer.GetAddressOf());
+
+	if (FAILED(hr))
+	{
+		return false;
+	}
+
+	uint16_t indices[] = {
+	    0, 2, 1, 0, 3, 4, 0, 1, 3, 0, 4, 2, 1, 2, 3, 2, 4, 3,
+	};
+	bd.Usage = D3D11_USAGE_DEFAULT;
+	bd.ByteWidth = sizeof(uint16_t) * ARRAYSIZE(indices);
+	bd.BindFlags = D3D11_BIND_INDEX_BUFFER;
+	bd.CPUAccessFlags = 0;
+	InitData.pSysMem = indices;  // указатель на наш массив индексов
+
+	hr = renderer.device->CreateBuffer(&bd, &InitData, geometry.index_buffer.GetAddressOf());
+	if (FAILED(hr))
+	{
+		return false;
+	}
+
+	return true;
+}
+
+struct Scene
+{
+	std::vector<Object> pyramids;
+	Camera camera;
+
+	void Init(HWND main_window, Renderer& renderer)
+	{
+		RECT rc;
+		GetClientRect(main_window, &rc);
+		UINT width = rc.right - rc.left;   // получаем ширину
+		UINT height = rc.bottom - rc.top;  // и высоту окна
+
+		camera.Set({0.0f, 2.0f, -8.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {width, height}, 0.01f, 100.f,
+		           DirectX::XM_PIDIV4);
+
+		// Инициализация матрицы мира
+		pyramids.resize(6);
+		for (auto& pyramid : pyramids)
+		{
+			pyramid.transform = DirectX::XMMatrixIdentity();
+			CreateGeometry(renderer, pyramid.geometry);
+		}
+	}
+
+	void Update()
+	{
+		uint32_t time_cur = GetTickCount();
+		if (time_start == 0)
+			time_start = time_cur;
+		float rotation = (time_cur - time_start) / 1000.0f;
+
+
+		for (uint32_t i = 0; i < pyramids.size(); ++i)
+		{
+			// Матрица-орбита: позиция объекта
+			matrix Orbit = DirectX::XMMatrixRotationY(-rotation + i * (DirectX::XM_PI * 2) / 6);
+			// Матрица-спин: вращение объекта вокруг своей оси
+			matrix Spin = DirectX::XMMatrixRotationY(rotation * 2);
+			// Матрица-позиция: перемещение на три единицы влево от начала координат
+			matrix Translate = DirectX::XMMatrixTranslation(-3.0f, 0.0f, 0.0f);
+			// Матрица-масштаб: сжатие объекта в 2 раза
+			matrix Scale = DirectX::XMMatrixScaling(0.5f, 0.5f, 0.5f);
+
+			// Результирующая матрица
+			//  --Сначала мы в центре, в масштабе 1:1:1, повернуты по всем осям на 0.0f.
+			//  --Сжимаем -> поворачиваем вокруг Y (пока мы еще в центре) -> переносим влево ->
+			//  --снова поворачиваем вокруг Y.
+			pyramids[i].transform = Scale * Spin * Translate * Orbit;
+
+			// pyramids[i]
+		}
+	}
+
+
+private:
+	uint32_t time_start = 0;
 };
 
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
@@ -74,11 +249,7 @@ HWND CreateWindowInstance()
 	return hWnd;
 }
 
-bool CreateDeviceAndSwapchainAndImmediateContext(HWND hWnd,
-                                                 ID3D11Device** pd3dDevice,
-                                                 ID3D11DeviceContext** pImmediateContext,
-                                                 IDXGISwapChain** pSwapChain,
-                                                 ID3D11Texture2D** pBackBuffer)
+bool CreateDeviceAndSwapchainAndImmediateContext(HWND hWnd, Renderer& renderer, BackBuffer& back_buffer)
 {
 	RECT rc;
 	GetClientRect(hWnd, &rc);
@@ -107,60 +278,99 @@ bool CreateDeviceAndSwapchainAndImmediateContext(HWND hWnd,
 
 	HRESULT hr =
 	    D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, createDeviceFlags, featureLevels, 1,
-	                                  D3D11_SDK_VERSION, &sd, pSwapChain, pd3dDevice, nullptr, pImmediateContext);
+	                                  D3D11_SDK_VERSION, &sd, back_buffer.swap_chain.GetAddressOf(),
+	                                  renderer.device.GetAddressOf(), nullptr, renderer.immediate_context.GetAddressOf());
 	if (FAILED(hr))
 		return false;
 
-	hr = (*pSwapChain)->GetBuffer(0, __uuidof(ID3D11Texture2D), (LPVOID*)pBackBuffer);
+	hr = back_buffer.swap_chain->GetBuffer(0, __uuidof(ID3D11Texture2D), (LPVOID*)back_buffer.color.GetAddressOf());
 	if (FAILED(hr))
 		return false;
+
+	hr = renderer.device->CreateRenderTargetView(back_buffer.color.Get(), nullptr, back_buffer.rtv.GetAddressOf());
+	if (FAILED(hr))
+		return false;
+
+	D3D11_TEXTURE2D_DESC desc_depth;  // Структура с параметрами
+	ZeroMemory(&desc_depth, sizeof(desc_depth));
+	desc_depth.Width = width;    // ширина и
+	desc_depth.Height = height;  // высота текстуры
+	desc_depth.MipLevels = 1;    // уровень интерполяции
+	desc_depth.ArraySize = 1;
+	desc_depth.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;  // формат (размер пикселя)
+	desc_depth.SampleDesc.Count = 1;
+	desc_depth.SampleDesc.Quality = 0;
+	desc_depth.Usage = D3D11_USAGE_DEFAULT;
+	desc_depth.BindFlags = D3D11_BIND_DEPTH_STENCIL;  // вид - буфер глубин
+	desc_depth.CPUAccessFlags = 0;
+	desc_depth.MiscFlags = 0;
+	hr = renderer.device->CreateTexture2D(&desc_depth, nullptr, back_buffer.depth.ReleaseAndGetAddressOf());
+
+	if (FAILED(hr))
+		return hr;
+
+	D3D11_DEPTH_STENCIL_VIEW_DESC descDSV;  // Структура с параметрами
+	ZeroMemory(&descDSV, sizeof(descDSV));
+	descDSV.Format = desc_depth.Format;  // формат как в текстуре
+	descDSV.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
+	descDSV.Texture2D.MipSlice = 0;
+	// При помощи заполненной структуры-описания и текстуры создаем объект буфера глубин
+	hr = renderer.device->CreateDepthStencilView(back_buffer.depth.Get(), &descDSV, back_buffer.dsv.GetAddressOf());
+
+	if (FAILED(hr))
+		return hr;
+
 	return true;
 }
 
-bool RenderTargetView(ID3D11Device* device, ID3D11Texture2D* buffer, ID3D11RenderTargetView** rtv)
+void UpdateShaderParameters(Renderer& renderer, const Material& material, const Camera& camera, const Object& object)
 {
-	HRESULT hr = device->CreateRenderTargetView(buffer, nullptr, rtv);
-	if (FAILED(hr))
-		return false;
-	return true;
+	ShaderParameters sp;
+	sp.world_matrix = DirectX::XMMatrixTranspose(object.transform);
+	sp.view_matrix = DirectX::XMMatrixTranspose(camera.view_matrix);
+	sp.projection_matrix = DirectX::XMMatrixTranspose(camera.projection_matrix);
+
+	renderer.immediate_context->UpdateSubresource(material.constant_buffer.Get(), 0, nullptr, &sp, 0, 0);
 }
 
-
-void Render(ID3D11DeviceContext* pImmediateContext,
-            ID3D11RenderTargetView* pRenderTargetView,
-            IDXGISwapChain* pSwapChain,
-            ID3D11InputLayout* pVertexLayout,
-            ID3D11Buffer* pVertexBuffer,
-            ID3D11VertexShader* pVertexShader,
-            ID3D11PixelShader* pPixelShader)
+void Render(Renderer& renderer, BackBuffer& back_buffer, Material& material, Scene& scene)
 {
 	float ClearColor[4] = {0.0f, 0.0f, 1.0f, 1.0f};  // красный, зеленый, синий, альфа-канал
-	pImmediateContext->ClearRenderTargetView(pRenderTargetView, ClearColor);
+	renderer.immediate_context->ClearRenderTargetView(back_buffer.rtv.Get(), ClearColor);
+	renderer.immediate_context->ClearDepthStencilView(back_buffer.dsv.Get(), D3D11_CLEAR_DEPTH, 1.0f, 0);
 
-	pImmediateContext->OMSetRenderTargets(1, &pRenderTargetView, nullptr);
+	ID3D11RenderTargetView* rtvs[] = {back_buffer.rtv.Get()};
+	renderer.immediate_context->OMSetRenderTargets(1, rtvs, back_buffer.dsv.Get());
 
 	D3D11_VIEWPORT vp;
-	vp.Width = (FLOAT)320;
-	vp.Height = (FLOAT)240;
+	vp.Width = (FLOAT)640;
+	vp.Height = (FLOAT)480;
 	vp.MinDepth = 0.0f;
 	vp.MaxDepth = 1.0f;
 	vp.TopLeftX = 0;
 	vp.TopLeftY = 0;
-	pImmediateContext->RSSetViewports(1, &vp);
+	renderer.immediate_context->RSSetViewports(1, &vp);
 
-
-	UINT stride = sizeof(float3);
+	UINT stride = sizeof(VertexInput);
 	UINT offset = 0;
-	pImmediateContext->IASetInputLayout(pVertexLayout);
-	pImmediateContext->IASetVertexBuffers(0, 1, &pVertexBuffer, &stride, &offset);
-	pImmediateContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-	pImmediateContext->VSSetShader(pVertexShader, NULL, 0);
-	pImmediateContext->PSSetShader(pPixelShader, NULL, 0);
-
-	pImmediateContext->Draw(3, 0);
+	renderer.immediate_context->IASetInputLayout(material.vertex_layout.Get());
+	renderer.immediate_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	renderer.immediate_context->VSSetShader(material.vertex_shader.Get(), nullptr, 0);
+	ID3D11Buffer* cbs[] = {material.constant_buffer.Get()};
+	renderer.immediate_context->VSSetConstantBuffers(0, 1, cbs);
+	renderer.immediate_context->PSSetShader(material.pixel_shader.Get(), nullptr, 0);
 
 	// Выбросить задний буфер на экран
-	pSwapChain->Present(0, 0);
+	for (auto& pyramid : scene.pyramids)
+	{
+		UpdateShaderParameters(renderer, material, scene.camera ,pyramid);
+		ID3D11Buffer* vbs[] = {pyramid.geometry.vertex_buffer.Get()};
+		renderer.immediate_context->IASetVertexBuffers(0, 1, vbs, &stride, &offset);
+		renderer.immediate_context->IASetIndexBuffer(pyramid.geometry.index_buffer.Get(), DXGI_FORMAT_R16_UINT, 0);
+		renderer.immediate_context->DrawIndexed(18, 0, 0);
+	}
+
+	back_buffer.swap_chain->Present(0, 0);
 }
 
 class WindowClass
@@ -196,11 +406,9 @@ bool CompileShaderFromFile(const WCHAR* szFileName, LPCSTR szEntryPoint, LPCSTR 
 
 	HRESULT hr = D3DCompileFromFile(szFileName, nullptr, nullptr, szEntryPoint, szShaderModel, D3DCOMPILE_ENABLE_STRICTNESS,
 	                                0, ppBlobOut, pErrorBlob.GetAddressOf());
-	/*hr = D3DX11CompileFromFile(szFileName, NULL, NULL, szEntryPoint, szShaderModel, dwShaderFlags, 0, NULL, ppBlobOut,
-	                           &pErrorBlob, NULL);*/
 	if (FAILED(hr))
 	{
-		if (pErrorBlob != NULL)
+		if (pErrorBlob != nullptr)
 			OutputDebugStringA((char*)pErrorBlob->GetBufferPointer());
 		return false;
 	}
@@ -208,17 +416,15 @@ bool CompileShaderFromFile(const WCHAR* szFileName, LPCSTR szEntryPoint, LPCSTR 
 	return true;
 }
 
-bool CreateShadersAndInputLayout(ID3D11Device* pd3dDevice,
-                                 ID3D11VertexShader** pVertexShader,
-                                 ID3D11PixelShader** pPixelShader,
-                                 ID3D11InputLayout** pVertexLayout)
+bool CreateShadersAndInputLayout(Renderer& renderer, Material& material)
 {
-	Microsoft::WRL::ComPtr<ID3DBlob> pVSBlob;
-	if (!CompileShaderFromFile(L"shaders.fx", "VS", "vs_5_0", pVSBlob.GetAddressOf()))
+	Microsoft::WRL::ComPtr<ID3DBlob> VSBlob;
+	if (!CompileShaderFromFile(L"shaders.fx", "VS", "vs_5_0", VSBlob.GetAddressOf()))
 	{
 		return false;
 	}
-	HRESULT hr = pd3dDevice->CreateVertexShader(pVSBlob->GetBufferPointer(), pVSBlob->GetBufferSize(), NULL, pVertexShader);
+	HRESULT hr = renderer.device->CreateVertexShader(VSBlob->GetBufferPointer(), VSBlob->GetBufferSize(), nullptr,
+	                                                 material.vertex_shader.GetAddressOf());
 	if (FAILED(hr))
 	{
 		return false;
@@ -227,23 +433,25 @@ bool CreateShadersAndInputLayout(ID3D11Device* pd3dDevice,
 
 	D3D11_INPUT_ELEMENT_DESC layout[] = {
 	    {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
+	    {"COLOR", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0}
 	    /* семантическое имя, семантический индекс, размер, входящий слот (0-15), адрес начала данных
 	       в буфере вершин, класс входящего слота (не важно), InstanceDataStepRate (не важно) */
 	};
 	UINT numElements = ARRAYSIZE(layout);
 
 	// Создание шаблона вершин
-	hr = pd3dDevice->CreateInputLayout(layout, numElements, pVSBlob->GetBufferPointer(), pVSBlob->GetBufferSize(),
-	                                   pVertexLayout);
+	hr = renderer.device->CreateInputLayout(layout, numElements, VSBlob->GetBufferPointer(), VSBlob->GetBufferSize(),
+	                                        material.vertex_layout.GetAddressOf());
 	if (FAILED(hr))
 		return false;
 
-	Microsoft::WRL::ComPtr<ID3DBlob> pPSBlob;
-	if (!CompileShaderFromFile(L"shaders.fx", "PS", "ps_5_0", pPSBlob.GetAddressOf()))
+	Microsoft::WRL::ComPtr<ID3DBlob> PSblob;
+	if (!CompileShaderFromFile(L"shaders.fx", "PS", "ps_5_0", PSblob.GetAddressOf()))
 	{
 		return false;
 	}
-	hr = pd3dDevice->CreatePixelShader(pPSBlob->GetBufferPointer(), pPSBlob->GetBufferSize(), NULL, pPixelShader);
+	hr = renderer.device->CreatePixelShader(PSblob->GetBufferPointer(), PSblob->GetBufferSize(), nullptr,
+	                                        material.pixel_shader.GetAddressOf());
 	if (FAILED(hr))
 	{
 		return false;
@@ -252,128 +460,21 @@ bool CreateShadersAndInputLayout(ID3D11Device* pd3dDevice,
 	return true;
 }
 
-bool CreateGeometry(ID3D11Device* pd3dDevice, ID3D11Buffer** pVertexBuffer)
+bool CreateShaderParameters(const Renderer& renderer, Material& material)
 {
-	// Создание буфера вершин (три вершины треугольника)
-	float3 vertices[] = {float3{0.0f, 0.5f, 0.5f}, float3{0.5f, -0.5f, 0.5f}, float3{-0.5f, -0.5f, 0.5f}};
-
-	D3D11_BUFFER_DESC bd;         // Структура, описывающая создаваемый буфер
-	ZeroMemory(&bd, sizeof(bd));  // очищаем ее
+	D3D11_BUFFER_DESC bd;
+	ZeroMemory(&bd, sizeof(bd));
 	bd.Usage = D3D11_USAGE_DEFAULT;
-	bd.ByteWidth = sizeof(float3) * ARRAYSIZE(vertices);  // размер буфера
-	bd.BindFlags = D3D11_BIND_VERTEX_BUFFER;              // тип буфера - буфер вершин
+	bd.ByteWidth = sizeof(ShaderParameters);    // размер буфера = размеру структуры
+	bd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;  // тип - константный буфер
 	bd.CPUAccessFlags = 0;
-	D3D11_SUBRESOURCE_DATA InitData;          // Структура, содержащая данные буфера
-	ZeroMemory(&InitData, sizeof(InitData));  // очищаем ее
-	InitData.pSysMem = vertices;              // указатель на наши 3 вершины
-	// Вызов метода g_pd3dDevice создаст объект буфера вершин
-	HRESULT hr = pd3dDevice->CreateBuffer(&bd, &InitData, pVertexBuffer);
-
+	HRESULT hr = renderer.device->CreateBuffer(&bd, nullptr, material.constant_buffer.GetAddressOf());
 	if (FAILED(hr))
 	{
 		return false;
 	}
-
 	return true;
 }
-
-#if 0
-
-bool CreateShaders()
-{
-	HRESULT hr = S_OK;
-
-	// Компиляция вершинного шейдера из файла
-	ID3DBlob* pVSBlob = NULL;  // Вспомогательный объект - просто место в оперативной памяти
-	hr = CompileShaderFromFile(L"Urok2.fx", "VS", "vs_4_0", &pVSBlob);
-	if (FAILED(hr))
-	{
-		MessageBox(
-		    NULL, L"Невозможно скомпилировать файл FX. Пожалуйста, запустите данную программу из папки, содержащей файл FX.",
-		    L"Ошибка", MB_OK);
-		return hr;
-	}
-
-	// Создание вершинного шейдера
-	hr = g_pd3dDevice->CreateVertexShader(pVSBlob->GetBufferPointer(), pVSBlob->GetBufferSize(), NULL, &g_pVertexShader);
-	if (FAILED(hr))
-	{
-		pVSBlob->Release();
-		return hr;
-	}
-
-	// Определение шаблона вершин
-	// Вершины могут иметь различные параметры - координаты в пространстве, нормаль, цвет, координаты
-	// текстуры. Шаблон вершин указывает, какие именно параметры содержат вершины, которые мы собираемся
-	// использовать. Наши вершины (SimpleVertex) содержат только информацию о координатах в пространстве.
-	// Здесь же мы указываем вершинный шейдер, который будет использоваться для обработки информации о
-	// наших вершинах.
-	D3D11_INPUT_ELEMENT_DESC layout[] = {
-	    {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
-	    /* семантическое имя, семантический индекс, размер, входящий слот (0-15), адрес начала данных
-	       в буфере вершин, класс входящего слота (не важно), InstanceDataStepRate (не важно) */
-	};
-	UINT numElements = ARRAYSIZE(layout);
-
-	// Создание шаблона вершин
-	hr = g_pd3dDevice->CreateInputLayout(layout, numElements, pVSBlob->GetBufferPointer(), pVSBlob->GetBufferSize(),
-	                                     &g_pVertexLayout);
-	pVSBlob->Release();
-	if (FAILED(hr))
-		return hr;
-
-	// Подключение шаблона вершин
-	g_pImmediateContext->IASetInputLayout(g_pVertexLayout);
-
-	// Компиляция пиксельного шейдера из файла
-	ID3DBlob* pPSBlob = NULL;
-	hr = CompileShaderFromFile(L"Urok2.fx", "PS", "ps_4_0", &pPSBlob);
-	if (FAILED(hr))
-	{
-		MessageBox(
-		    NULL, L"Невозможно скомпилировать файл FX. Пожалуйста, запустите данную программу из папки, содержащей файл FX.",
-		    L"Ошибка", MB_OK);
-		return hr;
-	}
-
-	// Создание пиксельного шейдера
-	hr = g_pd3dDevice->CreatePixelShader(pPSBlob->GetBufferPointer(), pPSBlob->GetBufferSize(), NULL, &g_pPixelShader);
-	pPSBlob->Release();
-	if (FAILED(hr))
-		return hr;
-
-	// Создание буфера вершин (три вершины треугольника)
-	SimpleVertex vertices[] = {XMFLOAT3(0.0f, 0.5f, 0.5f), XMFLOAT3(0.5f, -0.5f, 0.5f), XMFLOAT3(-0.5f, -0.5f, 0.5f)};
-
-	D3D11_BUFFER_DESC bd;         // Структура, описывающая создаваемый буфер
-	ZeroMemory(&bd, sizeof(bd));  // очищаем ее
-	bd.Usage = D3D11_USAGE_DEFAULT;
-	bd.ByteWidth = sizeof(SimpleVertex) * 3;  // размер буфера
-	bd.BindFlags = D3D11_BIND_VERTEX_BUFFER;  // тип буфера - буфер вершин
-	bd.CPUAccessFlags = 0;
-	D3D11_SUBRESOURCE_DATA InitData;          // Структура, содержащая данные буфера
-	ZeroMemory(&InitData, sizeof(InitData));  // очищаем ее
-	InitData.pSysMem = vertices;              // указатель на наши 3 вершины
-	// Вызов метода g_pd3dDevice создаст объект буфера вершин
-	hr = g_pd3dDevice->CreateBuffer(&bd, &InitData, &g_pVertexBuffer);
-	if (FAILED(hr))
-		return hr;
-
-	// Установка буфера вершин
-	UINT stride = sizeof(SimpleVertex);
-	UINT offset = 0;
-	g_pImmediateContext->IASetVertexBuffers(0, 1, &g_pVertexBuffer, &stride, &offset);
-
-	// Установка способа отрисовки вершин в буфере (в данном случае - TRIANGLE LIST,
-	// т. е. точки 1-3 - первый треугольник, 4-6 - второй и т. д. Другой способ - TRIANGLE STRIP.
-	// В этом случае точки 1-3 - первый треугольник, 2-4 - второй, 3-5 - третий и т. д.
-	// В этом примере есть только один треугольник, поэтому способ отрисовки не имеет значения.
-	g_pImmediateContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-
-	return S_OK;
-}
-
-#endif
 
 int main()
 {
@@ -385,47 +486,37 @@ int main()
 	}
 
 
-	HWND main_window_hwnd = CreateWindowInstance();
-	if (!main_window_hwnd)
+	HWND main_window = CreateWindowInstance();
+	if (!main_window)
 	{
 		return Error;
 	}
 
-	Microsoft::WRL::ComPtr<ID3D11Device> pd3dDevice = nullptr;  // Устройство (для создания объектов)
-	Microsoft::WRL::ComPtr<ID3D11DeviceContext> pImmediateContext = nullptr;  // Контекст устройства (рисование)
-	Microsoft::WRL::ComPtr<IDXGISwapChain> pSwapChain = nullptr;  // Цепь связи (буфера с экраном)
-	Microsoft::WRL::ComPtr<ID3D11Texture2D> pBackBuffer = nullptr;
-	Microsoft::WRL::ComPtr<ID3D11RenderTargetView> pRenderTargetView = nullptr;  // Объект заднего буфера
+	Renderer renderer;
+	BackBuffer back_buffer;
+	Material material;
 
-	if (!CreateDeviceAndSwapchainAndImmediateContext(main_window_hwnd, pd3dDevice.GetAddressOf(),
-	                                                 pImmediateContext.GetAddressOf(), pSwapChain.GetAddressOf(),
-	                                                 pBackBuffer.GetAddressOf()))
+
+	if (!CreateDeviceAndSwapchainAndImmediateContext(main_window, renderer, back_buffer))
 	{
 		return Error;
 	}
 
-	if (!RenderTargetView(pd3dDevice.Get(), pBackBuffer.Get(), pRenderTargetView.GetAddressOf()))
+	if (!CreateShadersAndInputLayout(renderer, material))
 	{
 		return Error;
 	}
 
-	Microsoft::WRL::ComPtr<ID3D11VertexShader> pVertexShader = nullptr;
-	Microsoft::WRL::ComPtr<ID3D11PixelShader> pPixelShader = nullptr;
-	Microsoft::WRL::ComPtr<ID3D11InputLayout> pVertexLayout = nullptr;
-
-	if (!CreateShadersAndInputLayout(pd3dDevice.Get(), pVertexShader.GetAddressOf(), pPixelShader.GetAddressOf(),
-	                                 pVertexLayout.GetAddressOf()))
+	if (!CreateShaderParameters(renderer, material))
 	{
 		return Error;
 	}
 
-	Microsoft::WRL::ComPtr<ID3D11Buffer> pVertexBuffer = nullptr;
-	if (!CreateGeometry(pd3dDevice.Get(), pVertexBuffer.GetAddressOf()))
-	{
-		return Error;
-	}
+	Scene scene;
 
-	ShowWindow(main_window_hwnd, SW_SHOWDEFAULT);
+	scene.Init(main_window, renderer);
+
+	ShowWindow(main_window, SW_SHOWDEFAULT);
 
 	MSG msg = {0};
 	while (WM_QUIT != msg.message)
@@ -437,8 +528,8 @@ int main()
 		}
 		else
 		{
-			Render(pImmediateContext.Get(), pRenderTargetView.Get(), pSwapChain.Get(), pVertexLayout.Get(),
-			       pVertexBuffer.Get(), pVertexShader.Get(), pPixelShader.Get());
+			scene.Update();
+			Render(renderer, back_buffer, material, scene);
 		}
 	}
 }

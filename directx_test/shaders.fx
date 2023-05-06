@@ -1,23 +1,42 @@
 //--------------------------------------------------------------------------------------
-// Файл: urok2.fx
-// Copyright (c) Microsoft Corporation. Все права защищены.
-//--------------------------------------------------------------------------------------
-
-//--------------------------------------------------------------------------------------
 // Вершинный шейдер
 //--------------------------------------------------------------------------------------
-float4 VS( float4 Pos : POSITION ) : SV_POSITION
+struct InputVertex
 {
-	// Оставляем координаты точки без изменений
-    return Pos;
+	float4 pos : POSITION;
+	float3 color : COLOR0;
+};
+
+struct VertexOutput
+{
+	float4 pos : SV_POSITION;
+	float3 color : COLOR0;
+};
+
+//--------------------------------------------------------------------------------------
+// Переменные константных буферов
+//--------------------------------------------------------------------------------------
+cbuffer ConstantBuffer : register(b0)  // b0 - индекс буфера
+{
+	matrix World;
+	matrix View;
+	matrix Projection;
+}
+
+void VS(InputVertex input_vertex, out VertexOutput vertex_output)
+{
+	vertex_output.pos = mul(input_vertex.pos, World);  // сначала в пространство мира
+	vertex_output.pos = mul(vertex_output.pos, View);  // затем в пространство вида
+	vertex_output.pos = mul(vertex_output.pos, Projection);  // в проекционное пространство
+
+	vertex_output.color = input_vertex.color;
 }
 
 
 //--------------------------------------------------------------------------------------
 // Пиксельный шейдер
 //--------------------------------------------------------------------------------------
-float4 PS( float4 Pos : SV_POSITION ) : SV_Target
+float4 PS(VertexOutput vertex_output) : SV_Target
 {
-	// Возвращаем желтый цвет, непрозрачный (альфа == 1, альфа-канал не включен).	
-    return float4( 1.0f, 1.0f, 0.0f, 1.0f );
+	return float4(vertex_output.color, 1);
 }
