@@ -12,6 +12,7 @@
 const int Error = -1;
 
 using float3 = DirectX::XMFLOAT3;
+using float4 = DirectX::XMFLOAT4;
 using matrix = DirectX::XMMATRIX;
 using uint2 = DirectX::XMUINT2;
 
@@ -19,12 +20,19 @@ struct VertexInput
 {
 	float3 position;
 	float3 color;
+	float3 normal;
 };
 
 struct Geometry
 {
 	Microsoft::WRL::ComPtr<ID3D11Buffer> vertex_buffer;
 	Microsoft::WRL::ComPtr<ID3D11Buffer> index_buffer;
+};
+
+struct Light
+{
+	float4 direction;
+	float4 color;
 };
 
 struct Material
@@ -91,9 +99,35 @@ struct Renderer
 bool CreateGeometry(Renderer& renderer, Geometry& geometry)
 {
 	VertexInput vertices[] = {
-	    VertexInput{{0.0f, 1.5f, 0.0f}, {1.0f, 1.0f, 0.0f}},  VertexInput{{-1.0f, 0.0f, -1.0f}, {0.0f, 1.0f, 0.0f}},
-	    VertexInput{{1.0f, 0.0f, -1.0f}, {1.0f, 0.0f, 0.0f}}, VertexInput{{-1.0f, 0.0f, 1.0f}, {0.0f, 1.0f, 1.0f}},
-	    VertexInput{{1.0f, 0.0f, 1.0f}, {1.0f, 0.0f, 1.0f}},
+	    VertexInput{{-1.0f, 1.0f, -1.0f}, {}, {0.0f, 1.0f, 0.0f}},
+	    VertexInput{{1.0f, 1.0f, -1.0f}, {}, {0.0f, 1.0f, 0.0f}},
+	    VertexInput{{1.0f, 1.0f, 1.0f}, {}, {0.0f, 1.0f, 0.0f}},
+	    VertexInput{{-1.0f, 1.0f, 1.0f}, {}, {0.0f, 1.0f, 0.0f}},
+
+	    VertexInput{{-1.0f, -1.0f, -1.0f}, {}, {0.0f, -1.0f, 0.0f}},
+	    VertexInput{{1.0f, -1.0f, -1.0f}, {}, {0.0f, -1.0f, 0.0f}},
+	    VertexInput{{1.0f, -1.0f, 1.0f}, {}, {0.0f, -1.0f, 0.0f}},
+	    VertexInput{{-1.0f, -1.0f, 1.0f}, {}, {0.0f, -1.0f, 0.0f}},
+
+	    VertexInput{{-1.0f, -1.0f, 1.0f}, {}, {-1.0f, 0.0f, 0.0f}},
+	    VertexInput{{-1.0f, -1.0f, -1.0f}, {}, {-1.0f, 0.0f, 0.0f}},
+	    VertexInput{{-1.0f, 1.0f, -1.0f}, {}, {-1.0f, 0.0f, 0.0f}},
+	    VertexInput{{-1.0f, 1.0f, 1.0f}, {}, {-1.0f, 0.0f, 0.0f}},
+
+	    VertexInput{{1.0f, -1.0f, 1.0f}, {}, {1.0f, 0.0f, 0.0f}},
+	    VertexInput{{1.0f, -1.0f, -1.0f}, {}, {1.0f, 0.0f, 0.0f}},
+	    VertexInput{{1.0f, 1.0f, -1.0f}, {}, {1.0f, 0.0f, 0.0f}},
+	    VertexInput{{1.0f, 1.0f, 1.0f}, {}, {1.0f, 0.0f, 0.0f}},
+
+	    VertexInput{{-1.0f, -1.0f, -1.0f}, {}, {0.0f, 0.0f, -1.0f}},
+	    VertexInput{{1.0f, -1.0f, -1.0f}, {}, {0.0f, 0.0f, -1.0f}},
+	    VertexInput{{1.0f, 1.0f, -1.0f}, {}, {0.0f, 0.0f, -1.0f}},
+	    VertexInput{{-1.0f, 1.0f, -1.0f}, {}, {0.0f, 0.0f, -1.0f}},
+
+	    VertexInput{{-1.0f, -1.0f, 1.0f}, {}, {0.0f, 0.0f, 1.0f}},
+	    VertexInput{{1.0f, -1.0f, 1.0f}, {}, {0.0f, 0.0f, 1.0f}},
+	    VertexInput{{1.0f, 1.0f, 1.0f}, {}, {0.0f, 0.0f, 1.0f}},
+	    VertexInput{{-1.0f, 1.0f, 1.0f}, {}, {0.0f, 0.0f, 1.0f}},
 	};
 
 	D3D11_BUFFER_DESC bd;         // Структура, описывающая создаваемый буфер
@@ -113,8 +147,24 @@ bool CreateGeometry(Renderer& renderer, Geometry& geometry)
 		return false;
 	}
 
-	uint16_t indices[] = {
-	    0, 2, 1, 0, 3, 4, 0, 1, 3, 0, 4, 2, 1, 2, 3, 2, 4, 3,
+	uint16_t indices[] = {3,  1,  0,  2,
+	                      1,  3,
+
+	                      6,  4,  5,  7,
+	                      4,  6,
+
+	                      11, 9,  8,  10,
+	                      9,  11,
+
+	                      14, 12, 13, 15,
+	                      12, 14,
+
+	                      19, 17, 16, 18,
+	                      17, 19,
+
+	                      22, 20, 21, 23,
+	                      20, 22
+
 	};
 	bd.Usage = D3D11_USAGE_DEFAULT;
 	bd.ByteWidth = sizeof(uint16_t) * ARRAYSIZE(indices);
@@ -182,7 +232,8 @@ bool CreateShadersAndInputLayout(Renderer& renderer, Material& material)
 
 	D3D11_INPUT_ELEMENT_DESC layout[] = {
 	    {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
-	    {"COLOR", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0}
+	    {"COLOR", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0},
+	    {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 24, D3D11_INPUT_PER_VERTEX_DATA, 0}
 	    /* семантическое имя, семантический индекс, размер, входящий слот (0-15), адрес начала данных
 	       в буфере вершин, класс входящего слота (не важно), InstanceDataStepRate (не важно) */
 	};
@@ -214,12 +265,15 @@ struct Scene
 {
 	std::vector<Object> pyramids;
 	Camera camera;
+	Light light[2];
 	Microsoft::WRL::ComPtr<ID3D11Buffer> constant_buffer;
 
 	struct ShaderParameters
 	{
 		matrix view_matrix;        // Матрица вида
 		matrix projection_matrix;  // Матрица проекции
+		float4 light_direction[2];
+		float4 light_color[2]; 
 	};
 
 	bool Init(HWND main_window, Renderer& renderer)
@@ -229,7 +283,7 @@ struct Scene
 		UINT width = rc.right - rc.left;   // получаем ширину
 		UINT height = rc.bottom - rc.top;  // и высоту окна
 
-		camera.Set({0.0f, 2.0f, -8.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {width, height}, 0.01f, 100.f,
+		camera.Set({0.0f, 4.0f, -10.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {width, height}, 0.01f, 100.f,
 		           DirectX::XM_PIDIV4);
 
 		if (!CreateShaderParameters<Scene::ShaderParameters>(renderer, constant_buffer.GetAddressOf()))
@@ -258,6 +312,10 @@ struct Scene
 				return false;
 			}
 		}
+
+		// Задаем цвет источников света, у нас он не будет меняться
+		light[0].color = {1.0f, 1.0f, 1.0f, 0.f};
+		light[1].color = {1.0f, 0.0f, 0.0f, 0.f};
 
 		return true;
 	}
@@ -289,6 +347,21 @@ struct Scene
 
 			// pyramids[i]
 		}
+
+		light[0].direction = {-0.577f, 0.577f, -0.577f, 1.f};
+		light[1].direction = {0.0f, 0.0f, -1.0f, 1.f};
+
+		// При помощи трансформаций поворачиваем второй источник света
+		matrix rotate_matrix = DirectX::XMMatrixRotationY(-2.0f * rotation);
+		DirectX::XMVECTOR light_dir = DirectX::XMLoadFloat4(&light[1].direction);
+		light_dir = DirectX::XMVector3Transform(light_dir, rotate_matrix);
+		DirectX::XMStoreFloat4(&light[1].direction, light_dir);
+
+		// При помощи трансформаций поворачиваем первый источник света
+		rotate_matrix = DirectX::XMMatrixRotationY(0.5f * rotation);
+		light_dir = DirectX::XMLoadFloat4(&light[0].direction);
+		light_dir = DirectX::XMVector3Transform(light_dir, rotate_matrix);
+		DirectX::XMStoreFloat4(&light[0].direction, light_dir);
 	}
 
 	void UploadShaderParams(Renderer& renderer)
@@ -296,6 +369,10 @@ struct Scene
 		Scene::ShaderParameters sp;
 		sp.view_matrix = DirectX::XMMatrixTranspose(camera.view_matrix);
 		sp.projection_matrix = DirectX::XMMatrixTranspose(camera.projection_matrix);
+		sp.light_color[0] = light[0].color;
+		sp.light_direction[0] = light[0].direction;
+		sp.light_color[1] = light[1].color;
+		sp.light_direction[1] = light[1].direction;
 		renderer.immediate_context->UpdateSubresource(constant_buffer.Get(), 0, nullptr, &sp, 0, 0);
 
 		for (const auto& pyramid : pyramids)
@@ -473,11 +550,12 @@ void Render(Renderer& renderer, BackBuffer& back_buffer, Scene& scene)
 		renderer.immediate_context->VSSetShader(pyramid.material.vertex_shader.Get(), nullptr, 0);
 		ID3D11Buffer* cbs[] = {scene.constant_buffer.Get(), pyramid.material.constant_buffer.Get()};
 		renderer.immediate_context->VSSetConstantBuffers(0, 2, cbs);
+		renderer.immediate_context->PSSetConstantBuffers(0, 2, cbs);
 		renderer.immediate_context->PSSetShader(pyramid.material.pixel_shader.Get(), nullptr, 0);
 		ID3D11Buffer* vbs[] = {pyramid.geometry.vertex_buffer.Get()};
 		renderer.immediate_context->IASetVertexBuffers(0, 1, vbs, &stride, &offset);
 		renderer.immediate_context->IASetIndexBuffer(pyramid.geometry.index_buffer.Get(), DXGI_FORMAT_R16_UINT, 0);
-		renderer.immediate_context->DrawIndexed(18, 0, 0);
+		renderer.immediate_context->DrawIndexed(36, 0, 0);
 	}
 
 	back_buffer.swap_chain->Present(0, 0);
