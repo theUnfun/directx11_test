@@ -28,8 +28,8 @@ struct VertexInput
 
 struct Geometry
 {
-	Microsoft::WRL::ComPtr<ID3D11Buffer> vertex_buffer;
-	Microsoft::WRL::ComPtr<ID3D11Buffer> index_buffer;
+	ComPtr<ID3D11Buffer> vertex_buffer;
+	ComPtr<ID3D11Buffer> index_buffer;
 };
 
 struct Light
@@ -85,18 +85,18 @@ struct Camera
 
 struct BackBuffer
 {
-	Microsoft::WRL::ComPtr<IDXGISwapChain> swap_chain;
-	Microsoft::WRL::ComPtr<ID3D11Texture2D> color;
-	Microsoft::WRL::ComPtr<ID3D11RenderTargetView> rtv;
+	ComPtr<IDXGISwapChain> swap_chain;
+	ComPtr<ID3D11Texture2D> color;
+	ComPtr<ID3D11RenderTargetView> rtv;
 
-	Microsoft::WRL::ComPtr<ID3D11Texture2D> depth;
-	Microsoft::WRL::ComPtr<ID3D11DepthStencilView> dsv;
+	ComPtr<ID3D11Texture2D> depth;
+	ComPtr<ID3D11DepthStencilView> dsv;
 };
 
 struct Renderer
 {
-	Microsoft::WRL::ComPtr<ID3D11Device> device;
-	Microsoft::WRL::ComPtr<ID3D11DeviceContext> immediate_context;
+	ComPtr<ID3D11Device> device;
+	ComPtr<ID3D11DeviceContext> immediate_context;
 };
 
 bool CreateGeometry(Renderer& renderer, Geometry& geometry)
@@ -198,7 +198,7 @@ bool CreateShaderParameters(const Renderer& renderer, ID3D11Buffer** buffer)
 
 bool CompileShaderFromFile(const WCHAR* file_name, LPCSTR entry_point, LPCSTR shader_model, ID3DBlob** blob_out)
 {
-	Microsoft::WRL::ComPtr<ID3DBlob> error_blob;
+	ComPtr<ID3DBlob> error_blob;
 
 	HRESULT hr = D3DCompileFromFile(file_name, nullptr, nullptr, entry_point, shader_model, D3DCOMPILE_ENABLE_STRICTNESS, 0,
 	                                blob_out, error_blob.GetAddressOf());
@@ -214,7 +214,7 @@ bool CompileShaderFromFile(const WCHAR* file_name, LPCSTR entry_point, LPCSTR sh
 
 bool CreateShadersAndInputLayout(Renderer& renderer, Material& material)
 {
-	Microsoft::WRL::ComPtr<ID3DBlob> VSBlob;
+	ComPtr<ID3DBlob> VSBlob;
 	if (!CompileShaderFromFile(L"shaders.fx", "VS", "vs_5_0", VSBlob.GetAddressOf()))
 	{
 		return false;
@@ -237,7 +237,7 @@ bool CreateShadersAndInputLayout(Renderer& renderer, Material& material)
 	if (FAILED(hr))
 		return false;
 
-	Microsoft::WRL::ComPtr<ID3DBlob> PSblob;
+	ComPtr<ID3DBlob> PSblob;
 	if (!CompileShaderFromFile(L"shaders.fx", "PS", "ps_5_0", PSblob.GetAddressOf()))
 	{
 		return false;
