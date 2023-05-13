@@ -4,6 +4,7 @@ struct VertexInput
 	float4 pos : POSITION;
 	float3 color : COLOR0;
 	float3 normal : NORMAL;
+	float2 uv : UV;
 };
 
 struct VertexOutput
@@ -11,11 +12,9 @@ struct VertexOutput
 	float4 pos : SV_POSITION;
 	float3 color : COLOR0;
 	float3 normal : NORMAL;
+	float2 uv : UV;
 };
 
-//--------------------------------------------------------------------------------------
-// Переменные константных буферов
-//--------------------------------------------------------------------------------------
 cbuffer SceneConstantBuffer : register(b0)  // b0 - индекс буфера
 {
 	matrix View;
@@ -24,40 +23,39 @@ cbuffer SceneConstantBuffer : register(b0)  // b0 - индекс буфера
 	float4 LightColor[2];
 }
 
-cbuffer ObjectConstantBuffer : register(b1)  // b0 - индекс буфера
+cbuffer ObjectConstantBuffer : register(b1)  // b1 - индекс буфера
 {
 	matrix World;
 	float4 OutputColor;
 }
 
+Texture2D TextureColor : register(t0);
+
+SamplerState LinearSamplerState : register(s0);
+
 //--------------------------------------------------------------------------------------
-// Вершинный шейдер
+// Vertex Shader
 //--------------------------------------------------------------------------------------
 void VS(VertexInput vertex_input, out VertexOutput vertex_output)
 {
-	vertex_output.pos = mul(vertex_input.pos, World);        // сначала в пространство мира
-	vertex_output.pos = mul(vertex_output.pos, View);        // затем в пространство вида
-	vertex_output.pos = mul(vertex_output.pos, Projection);  // в проекционное пространство
+	vertex_output.pos = mul(vertex_input.pos, World);       
+	vertex_output.pos = mul(vertex_output.pos, View);      
+	vertex_output.pos = mul(vertex_output.pos, Projection); 
 	vertex_output.normal = mul(vertex_input.normal, World);
-
-	// vertex_output.color = vertex_input.color;
-	vertex_output.color = 1.0f;
+	vertex_output.uv = vertex_input.uv;
 }
 
-
 //--------------------------------------------------------------------------------------
-// Пиксельный шейдер
+// Pixel Shader
 //--------------------------------------------------------------------------------------
 float4 PS(VertexOutput pixel_input) : SV_Target
 {
-	// float4 finalColor = float4(pixel_input.color,1.0f);
 	float4 final_color = 0;
-
-	// складываем освещенность пикселя от всех источников света
+	float3 texture_color = TextureColor.Sample(LinearSamplerState, pixel_input.uv);
 	for (int i = 0; i < 2; i++)
 	{
 		final_color +=
-		    saturate(dot((float3)LightDir[i], pixel_input.normal)) * LightColor[i] * float4(pixel_input.color, 1.0f);
+		    saturate(dot((float3)LightDir[i], pixel_input.normal)) * LightColor[i] * float4(texture_color, 1.0f);
 	}
 	final_color = saturate(final_color);
 	final_color.a = 1;
